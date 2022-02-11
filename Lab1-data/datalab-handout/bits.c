@@ -140,7 +140,11 @@ NOTES:
  *   Rating: 1
  */
 int bitXor(int x, int y) {
-  return ~(~(~x & y) & ~(~y & x));
+  int norm, reve;
+  norm = ~(~x & y);
+  reve = ~(~y & x);
+  return ~(norm & reve);
+  // return ~((~(~x & y)) & (~(~y & x)));
 }
 /* 
  * tmin - return minimum two's complement integer 
@@ -170,12 +174,10 @@ int isTmax(int x) {
  *   Rating: 2
  */
 int allOddBits(int x) {
-  int check = 0x0000AAAA;
-  int ret = 1;
-  ret &= !((check & x) ^ check);
-  check <<= 16;
-  ret &= !((check & x) ^ check);
-  return ret;
+  int check = 0x000000AA;
+  check |= check << 8;
+  check |= check << 16;
+  return !((x & check) ^ check);
 }
 /* 
  * negate - return -x 
@@ -221,11 +223,15 @@ int conditional(int x, int y, int z) {
  *   Rating: 3
  */
 int isLessOrEqual(int x, int y) {
-  return 2;
-  // int equal = !(x ^ y);
-  // int right = !!(((y >> 1) + (~(x >> 1) + 1)) >> 31);  // 1 if y>>1 < x>>1
-  // int rightequal = !((x >> 1) ^ (y >> 1));
-  // return equal | (!equal & right) | (!equal & !right & !rightequal) | (!equal & !right & rightequal & (y & 1));
+  // x <= y: x == y || x - y < 0
+  int equal = !(x ^ y);
+  int minus = x + (~y + 1);
+  int msign = minus >> 31;
+  int signx = (x >> 31) & 1;
+  int signy = (y >> 31) & 1;
+  int xpos_yneg = (~signx & signy);
+  int xneg_ypos = (signx & ~signy);
+  return (!xpos_yneg) & (equal | xneg_ypos | (!xpos_yneg & !xneg_ypos & msign));
 }
 //4
 /* 
@@ -257,7 +263,21 @@ int logicalNeg(int x) {
  *  Rating: 4
  */
 int howManyBits(int x) {
-  return 0;
+  // unsigned ui = (x ^ (x >> 31)) - (x >> 31);  // abs
+  int sign = x >> 31;
+  int ui = (sign & ~x) | (~sign & x);
+  int mt16, mt8, mt4, mt2, mt1;
+  mt16 = !!(ui >> 16) << 4;
+  ui >>= mt16;
+  mt8 = !!(ui >> 8) << 3;
+  ui >>= mt8;
+  mt4 = !!(ui >> 4) << 2;
+  ui >>= mt4;
+  mt2 = !!(ui >> 2) << 1;
+  ui >>= mt2;
+  mt1 = !!(ui >> 1);  // check the higher one bit of a 2-bit number
+  ui >>= mt1;
+  return mt16 + mt8 + mt4 + mt2 + mt1 + ui + 1;
 }
 //float
 /* 
@@ -295,30 +315,64 @@ unsigned float_twice(unsigned uf) {
  *   Rating: 4
  */
 unsigned float_i2f(int x) {
-  int s = x >= 0 ? 0 : 1;
-  x = x >= 0 ? x : -x;
-  unsigned highest = 1 << 31;
-  while (highest && !(highest & x)) highest >>= 1;
-  if (highest == 0) return 0;
+  int s = 0;
   int pos = 0;
-  while (highest) {++pos; highest >>= 1;}
-  int dist = pos - 24;
-  int m;
+  unsigned int highest;
+  int dist, m, e;
+  int dropmask, drop, mid;
+  if (x == 0) return 0;
+  if (x < 0) {
+    s = 0x80000000;
+    x = -x;
+  }
+  highest = x;
+  while (highest) {
+    ++pos;
+    highest >>= 1;
+  }
+  dist = pos - 24;
   if (dist > 0) m = x >> dist;
   else m = x << (-dist);
-  int e = 150 + dist;
+  e = 150 + dist;
   if (dist > 0) {
-    int dropmask = (1 << dist) - 1;
-    int drop = dropmask & x;
-    int mid = 1 << (dist - 1);
-    if (drop > mid || drop == mid && (m & 1)) {
-      if ((m + 1) & (1 << 24)) ++e;
+    dropmask = (1 << dist) - 1;
+    drop = dropmask & x;
+    mid = 1 << (dist - 1);
+    if (drop > mid || (drop == mid && (m & 1))) {
       ++m;
+      if (m & 0x01000000) ++e;
     }
   }
   
-  return (s << 31) | (e << 23) | (m & 0x7fffff);
+  return s | (e << 23) | (m & 0x7fffff);
 }
+// unsigned float_i2f(int x) {
+//   int s = 0;
+//   if (x < 0) {
+//     s = 0x80000000;
+//     x = -x;
+//   }
+//   unsigned highest = x;
+//   int pos = 0;
+//   if (x == 0) return 0;
+//   while (highest) {highest >>= 1; ++pos;}
+//   int dist = pos - 24;
+//   int m;
+//   if (dist > 0) m = x >> dist;
+//   else m = x << (-dist);
+//   int e = 150 + dist;
+//   if (dist > 0) {
+//     int dropmask = (1 << dist) - 1;
+//     int drop = dropmask & x;
+//     int mid = 1 << (dist - 1);
+//     if (drop > mid || drop == mid && (m & 1)) {
+//       if ((m + 1) & (1 << 24)) ++e;
+//       ++m;
+//     }
+//   }
+  
+//   return s | (e << 23) | (m & 0x7fffff);
+// }
 /* 
  * float_f2i - Return bit-level equivalent of expression (int) f
  *   for floating point argument f.
@@ -335,20 +389,21 @@ int float_f2i(unsigned uf) {
   int s = uf & (1 << 31);
   int e = ((uf >> 23) & 0xff) - 127;
   int m = uf & 0x7fffff;
+  int ret = m | (1 << 23);
+  int dist;
   if (e >= 31) return 0x80000000u;
   if (e < 0) return 0;
-  int ret = m | (1 << 23);
   if (e < 23) {
-    int dist = 23 - e;
+    dist = 23 - e;
     ret >>= dist;
   } else {
-    int dist = e - 23;
+    dist = e - 23;
     ret <<= dist;
   }
   return s ? -ret : ret;
 }
 
 // int main(void) {
-//   int r = float_f2i(1065353216);
+//   int r = float_i2f(-2139095040);
 //   return 0;
 // }
